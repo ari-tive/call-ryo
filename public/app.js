@@ -220,9 +220,10 @@ function connect() {
     const msg = JSON.parse(data);
     if (msg.type === 'ready') {
       status.textContent = 'Online';
-      // Replay conversation history so Gemini remembers context
+      // Replay recent conversation history as context (cap at 30 turns to avoid overloading)
       if (sessionMessages.length > 0) {
-        socket.send(JSON.stringify({ type: 'history', messages: sessionMessages }));
+        const recent = sessionMessages.slice(-30);
+        socket.send(JSON.stringify({ type: 'history', messages: recent }));
       }
     }
     if (msg.type === 'error') { status.textContent = 'Error'; addBubble(msg.message, 'ryo'); }

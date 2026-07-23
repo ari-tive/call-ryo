@@ -102,13 +102,14 @@ Your spoken words should feel alive and emotional through these tags.` }]
       } else if (msg.type === 'audio' && msg.data) {
         live.sendClientContent({ turns: [{ role: 'user', parts: [{ inlineData: { mimeType: msg.mimeType || 'audio/pcm;rate=16000', data: msg.data } }] }], turnComplete: true });
       } else if (msg.type === 'history' && Array.isArray(msg.messages)) {
-        // Replay conversation history so Gemini remembers context
+        // Replay conversation history as context — do NOT set turnComplete
+        // so Gemini buffers it without trying to respond to old messages
         const turns = msg.messages.map(m => ({
           role: m.who === 'user' ? 'user' : 'model',
           parts: [{ text: m.text }]
         }));
         if (turns.length > 0) {
-          live.sendClientContent({ turns, turnComplete: true });
+          live.sendClientContent({ turns });
         }
       }
     } catch {
