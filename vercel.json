@@ -1,18 +1,13 @@
 {
-  "builds": [
-    {
-      "src": "server.js",
-      "use": "@vercel/node"
-    }
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": "/api/$1" }
   ],
-  "routes": [
+  "headers": [
     {
-      "src": "/live",
-      "dest": "server.js"
-    },
-    {
-      "src": "/(.*)",
-      "dest": "/public/$1"
+      "source": "/api/(.*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }
+      ]
     }
   ]
 }
