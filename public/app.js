@@ -41,8 +41,8 @@ const expressionMap = {
 // ── State ──
 let socket, frameTimer, audioContext, playhead = 0, transcript = '';
 let isMuted = false;
-let outputGain = null; // GainNode for mute/unmute
-let voiceMode = 'live'; // 'live' or 'push'
+let outputGain = null;
+let voiceMode = 'live';
 let isRecording = false;
 let isLiveActive = false;
 let mediaStream = null;
@@ -52,6 +52,8 @@ let silenceTimer = null;
 let recognition = null;
 let pushAnalyser = null;
 let pushAnimFrame = null;
+let ryoBubble = null; // current streaming bubble for Ryo's response
+let lastSentText = ''; // avoid sending duplicate text
 
 // ── Bubbles & Expressions ──
 function addBubble(text, who) {
@@ -97,7 +99,7 @@ async function queuePcm(base64, rate) {
   for (let i = 0; i < pcm.length; i++) channel[i] = pcm[i] / 32768;
   const source = ctx.createBufferSource();
   source.buffer = buffer;
-  source.connect(outputGain); // Connect through gain node
+  source.connect(outputGain);
   playhead = Math.max(playhead, ctx.currentTime + .03);
   source.start(playhead);
   playhead += buffer.duration;
@@ -123,10 +125,30 @@ function connect() {
     if (msg.type === 'error') { status.textContent = 'Error'; addBubble(msg.message, 'ryo'); }
     if (msg.type === 'expression') setExpression(msg.expression);
     if (msg.type === 'audio' && voiceToggle.checked) await queuePcm(msg.data, 24000);
-    if (msg.type === 'transcript') transcript += msg.text;
-    if (msg.type === 'text') transcript += msg.text;
+
+    // Stream Ryo's text response into a live bubble
+    if (msg.type === 'text' && msg.text) {
+      if (!ryoBubble) {
+        ryoBubble = addBubble('', 'ryo');
+      }
+      ryoBubble.textContent += msg.text;
+      messages.scrollTop = messages.scrollHeight;
+    }
+    if (msg.type === 'transcript' && msg.text) {
+      if (!ryoBubble) {
+        ryoBubble = addBubble('', 'ryo');
+      }
+      ryoBubble.textContent += msg.text;
+      messages.scrollTop = messages.scrollHeight;
+    }
+
     if (msg.type === 'turnComplete') {
-      if (transcript.trim()) addBubble(transcript.trim(), 'ryo');
+      // Finalize the bubble
+      if (ryoBubble) {
+        const finalText = ryoBubble.textContent.trim();
+        if (!finalText) ryoBubble.remove();
+        ryoBubble = null;
+      }
       transcript = '';
       const wait = Math.max(0, (playhead - (audioContext?.currentTime || 0)) * 1000);
       setTimeout(() => animateMouth(false), wait + 100);
@@ -137,8 +159,12 @@ function connect() {
 
 function sendText(text) {
   if (!text || socket?.readyState !== WebSocket.OPEN) return;
+  if (text === lastSentText) return; // avoid duplicates
+  lastSentText = text;
   addBubble(text, 'user');
   socket.send(JSON.stringify({ type: 'text', text }));
+  // Reset duplicate guard after a short delay
+  setTimeout(() => { if (lastSentText === text) lastSentText = ''; }, 1000);
 }
 
 function sendAudio(base64) {
@@ -187,21 +213,44 @@ function initSpeechRecognition() {
     // Show interim in input
     $('#messageInput').value = interimText || finalText;
 
-    if (finalText) {
-      // Reset silence timer on final result
+    if (finalText && finalText !== lastSentText) {
+      // Show finalized speech as a user bubble immediately
+      if (!lastSentText) {
+        addBubble(finalText, 'user');
+        lastSentText = finalText;
+        setTimeout(() => { lastSentText = ''; }, 1000);
+      }
+      // Reset silence timer — send to Ryo after silence
       resetSilenceTimer(finalText);
     }
   };
 
   rec.onerror = (e) => {
-    if (e.error === 'no-speech' || e.error === 'aborted') return; // normal
     console.warn('Speech recognition error:', e.error);
+    if (e.error === 'not-allowed') {
+      hintText.textContent = 'Microphone access denied. Check browser permissions.';
+      isLiveActive = false;
+      talkBtn.classList.remove('live-active', 'recording');
+    }
   };
 
   rec.onend = () => {
-    // Auto-restart if live mode is still active
     if (isLiveActive) {
-      try { rec.start(); } catch {}
+      // Restart with a small delay to avoid rapid-fire restart loops
+      talkBtn.classList.remove('recording');
+      setTimeout(() => {
+        if (isLiveActive) {
+          try { rec.start(); } catch (err) {
+            console.warn('Failed to restart recognition:', err);
+            // If restart fails, try again after a longer delay
+            setTimeout(() => {
+              if (isLiveActive) {
+                try { rec.start(); } catch {}
+              }
+            }, 1000);
+          }
+        }
+      }, 300);
     } else {
       talkBtn.classList.remove('recording');
       status.textContent = 'Online';
@@ -230,7 +279,15 @@ function startLiveMode() {
   talkBtn.classList.add('live-active');
   talkBtn.classList.remove('recording');
   hintText.textContent = 'Live mode active — speak naturally, auto-sends on silence.';
-  try { recognition.start(); } catch {}
+  try { recognition.start(); } catch (err) {
+    console.warn('Could not start recognition:', err);
+    // Retry after a brief pause
+    setTimeout(() => {
+      if (isLiveActive) {
+        try { recognition.start(); } catch {}
+      }
+    }, 500);
+  }
 }
 
 function stopLiveMode() {
@@ -240,7 +297,7 @@ function stopLiveMode() {
   if (recognition) {
     try { recognition.stop(); } catch {}
   }
-  // Send any remaining text
+  // Send any remaining text in the input
   const remaining = $('#messageInput').value.trim();
   if (remaining) {
     sendText(remaining);
@@ -271,14 +328,12 @@ async function startPushRecording() {
   talkBtn.classList.add('recording');
   hintText.textContent = 'Recording… release to send.';
 
-  // Use ScriptProcessorNode to capture raw PCM
   const ctx = new AudioContext({ sampleRate: 16000 });
   const source = ctx.createMediaStreamSource(mediaStream);
   pushAnalyser = ctx.createAnalyser();
   pushAnalyser.fftSize = 512;
   source.connect(pushAnalyser);
 
-  // Also set up ScriptProcessor for raw capture
   const bufferSize = 4096;
   const processor = ctx.createScriptProcessor(bufferSize, 1, 1);
   pushAudioChunks = [];
@@ -286,7 +341,6 @@ async function startPushRecording() {
   processor.onaudioprocess = (e) => {
     if (!isRecording) return;
     const inputData = e.inputBuffer.getChannelData(0);
-    // Convert float32 to int16 PCM
     const pcm16 = new Int16Array(inputData.length);
     for (let i = 0; i < inputData.length; i++) {
       const s = Math.max(-1, Math.min(1, inputData[i]));
@@ -298,10 +352,7 @@ async function startPushRecording() {
   source.connect(processor);
   processor.connect(ctx.destination);
 
-  // Store refs for cleanup
   pushRecorder = { ctx, source, processor, stream: mediaStream };
-
-  // Visual feedback with analyser
   updatePushVisual();
 }
 
@@ -310,7 +361,6 @@ function updatePushVisual() {
   const data = new Uint8Array(pushAnalyser.frequencyBinCount);
   pushAnalyser.getByteFrequencyData(data);
   const avg = data.reduce((a, b) => a + b, 0) / data.length;
-  // Scale talk button glow based on volume
   const intensity = Math.min(1, avg / 60);
   talkBtn.style.boxShadow = `0 0 ${20 + intensity * 30}px rgba(255, 68, 102, ${0.4 + intensity * 0.4})`;
   pushAnimFrame = requestAnimationFrame(updatePushVisual);
@@ -332,7 +382,6 @@ function stopPushRecording() {
     pushAnalyser = null;
   }
 
-  // Merge all chunks and send
   if (pushAudioChunks.length > 0) {
     const totalLength = pushAudioChunks.reduce((acc, chunk) => acc + chunk.length, 0);
     const merged = new Int16Array(totalLength);
@@ -343,7 +392,6 @@ function stopPushRecording() {
     }
     pushAudioChunks = [];
 
-    // Convert to base64
     const bytes = new Uint8Array(merged.buffer);
     let binary = '';
     for (let i = 0; i < bytes.length; i++) {
@@ -351,7 +399,7 @@ function stopPushRecording() {
     }
     const base64 = btoa(binary);
 
-    if (base64.length > 100) { // Only send if there's actual audio
+    if (base64.length > 100) {
       sendAudio(base64);
       hintText.textContent = 'Audio sent!';
       setTimeout(() => { hintText.textContent = 'Hold the mic to talk.'; }, 1500);
@@ -368,7 +416,6 @@ talkBtn.addEventListener('mousedown', (e) => {
   if (voiceMode === 'push') {
     startPushRecording();
   } else {
-    // Live mode: toggle
     if (isLiveActive) {
       stopLiveMode();
     } else {
@@ -430,7 +477,6 @@ muteBtn.addEventListener('click', () => setMuted(!isMuted));
 
 // ── Mode Switch ──
 function setMode(mode) {
-  // Stop any active recording first
   if (isLiveActive) stopLiveMode();
   if (isRecording) stopPushRecording();
 
