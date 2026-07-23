@@ -12,10 +12,7 @@
     <section class="stage" aria-label="Avatar stage">
       <header class="topbar">
         <div><strong>Ryo</strong><span id="status">Connecting…</span></div>
-        <div class="topbar-actions">
-          <button id="historyBtn" class="icon" aria-label="Chat history" title="Chat history">☰</button>
-          <button id="settingsBtn" class="icon" aria-label="Open settings" title="Settings">⚙</button>
-        </div>
+        <button id="settingsBtn" class="icon" aria-label="Open settings" title="Settings">⚙</button>
       </header>
       <div class="glow"></div>
       <div id="avatar" class="avatar outfit-default" aria-label="Ryo avatar">
@@ -25,15 +22,6 @@
     </section>
 
     <section class="chat">
-      <!-- History Panel -->
-      <div class="history-panel" id="historyPanel">
-        <div class="history-header">
-          <span class="history-title-label">Chats</span>
-          <button id="newChatBtn" class="new-chat-btn">+ New</button>
-        </div>
-        <div class="history-list" id="historyList"></div>
-      </div>
-
       <div id="messages" class="messages" aria-live="polite">
         <article class="bubble ryo">...</article>
       </div>
@@ -71,16 +59,49 @@
     </section>
   </main>
 
+  <!-- Settings Dialog -->
   <dialog id="settings">
     <form method="dialog">
       <header><h2>Settings</h2><button class="icon" aria-label="Close">×</button></header>
+
       <label>Background<select id="background"><option value="moonlit">Moonlit library</option><option value="forest">Enchanted forest</option><option value="cafe">Rainy café</option></select></label>
       <label>Outfit tint<select id="outfit"><option value="default">Royal violet</option><option value="winter">Winter blue</option><option value="rose">Rose cloak</option></select></label>
       <label class="toggle"><input id="voiceToggle" type="checkbox" checked /> Play voice responses</label>
       <label>Silence timeout (Live mode)<select id="silenceTimeout"><option value="1500">1.5s</option><option value="2000" selected>2s</option><option value="3000">3s</option><option value="5000">5s</option></select></label>
-      <p>Replace the three PNG files in <code>public/assets</code> with your own perfectly aligned expressions at any time.</p>
+
+      <div class="settings-divider"></div>
+
+      <div class="context-section">
+        <div class="context-header">
+          <span class="context-title">Context Window</span>
+          <span class="context-label" id="contextText">0 / 500k chars</span>
+        </div>
+        <div class="context-bar-track">
+          <div class="context-bar-fill" id="contextBar"></div>
+        </div>
+      </div>
+
+      <div class="settings-actions">
+        <button type="button" id="trimBtn" class="settings-btn">✂ Trim Session</button>
+        <button type="button" id="clearAllBtn" class="settings-btn danger">🗑 Clear Everything</button>
+      </div>
+
+      <p>Trim removes older messages to free context space. Clear wipes the entire session.</p>
     </form>
   </dialog>
+
+  <!-- Confirm Dialog -->
+  <dialog id="confirmDialog">
+    <form method="dialog">
+      <header><h2>⚠ Clear Everything?</h2><button class="icon" aria-label="Close">×</button></header>
+      <p class="confirm-msg">This will permanently delete <strong>all messages</strong> in this session. This cannot be undone.</p>
+      <div class="confirm-actions">
+        <button value="cancel" class="settings-btn">Cancel</button>
+        <button value="confirm" class="settings-btn danger">Yes, Delete Everything</button>
+      </div>
+    </form>
+  </dialog>
+
   <script type="module" src="app.js"></script>
 </body>
 </html>

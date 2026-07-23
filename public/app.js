@@ -80,140 +80,69 @@ const VAD_MIN_SPEECH_MS = 400;
 const VAD_MIN_AUDIO_SAMPLES = 16000;
 const VAD_COOLDOWN_MS = 1500;
 
-// ── Conversation History ──
-const STORAGE_KEY = 'ryo_conversations';
-const CURRENT_KEY = 'ryo_current_id';
-let conversations = [];
-let currentConvId = null;
+// ── Session (single infinite conversation) ──
+const STORAGE_KEY = 'ryo_session';
+const MAX_CHARS = 500000;
+let sessionMessages = [];
 
-function genId() {
-  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+function loadSession() {
+  try { sessionMessages = JSON.parse(localStorage.getItem(STORAGE_KEY)) || []; }
+  catch { sessionMessages = []; }
 }
 
-function loadHistory() {
-  try { conversations = JSON.parse(localStorage.getItem(STORAGE_KEY)) || []; }
-  catch { conversations = []; }
-  currentConvId = localStorage.getItem(CURRENT_KEY) || null;
-  // Validate current ID exists
-  if (currentConvId && !conversations.find(c => c.id === currentConvId)) {
-    currentConvId = null;
-  }
+function saveSession() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(sessionMessages));
 }
 
-function saveHistory() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(conversations));
-  localStorage.setItem(CURRENT_KEY, currentConvId || '');
+function getSessionChars() {
+  let total = 0;
+  for (const m of sessionMessages) total += (m.text || '').length;
+  return total;
 }
 
-function getCurrentConv() {
-  return conversations.find(c => c.id === currentConvId);
+function updateContextBar() {
+  const bar = $('#contextBar');
+  const label = $('#contextText');
+  if (!bar || !label) return;
+  const used = getSessionChars();
+  const pct = Math.min(100, (used / MAX_CHARS) * 100);
+  bar.style.width = pct + '%';
+  bar.className = 'context-bar-fill' + (pct > 80 ? ' full' : pct > 60 ? ' high' : pct > 40 ? ' mid' : '');
+  const usedK = (used / 1000).toFixed(1);
+  label.textContent = `${usedK}k / 500k chars`;
 }
 
-function createNewConv() {
-  const conv = {
-    id: genId(),
-    title: 'New Chat',
-    created: new Date().toISOString(),
-    messages: []
-  };
-  conversations.unshift(conv);
-  currentConvId = conv.id;
-  saveHistory();
-  renderHistory();
-  return conv;
+function trimSession() {
+  if (sessionMessages.length <= 6) return; // too few to trim
+  // Keep first 2 and last 2, remove ~30% from the middle
+  const head = sessionMessages.slice(0, 2);
+  const tail = sessionMessages.slice(-2);
+  const middle = sessionMessages.slice(2, -2);
+  const removeCount = Math.max(1, Math.floor(middle.length * 0.3));
+  // Remove from the oldest part of the middle
+  const trimmed = middle.slice(removeCount);
+  sessionMessages = [...head, ...trimmed, ...tail];
+  saveSession();
+  renderSession();
+  updateContextBar();
 }
 
-function saveMsg(text, who) {
-  const conv = getCurrentConv();
-  if (!conv) return;
-  conv.messages.push({ text, who, time: new Date().toISOString() });
-  // Auto-title from first user message
-  if (who === 'user' && conv.title === 'New Chat') {
-    conv.title = text.length > 40 ? text.slice(0, 40) + '…' : text;
-    renderHistory();
-  }
-  saveHistory();
+function clearSession() {
+  sessionMessages = [];
+  saveSession();
+  renderSession();
+  updateContextBar();
 }
 
-function saveRyoResponse(text) {
-  const conv = getCurrentConv();
-  if (!conv || !text) return;
-  conv.messages.push({ text, who: 'ryo', time: new Date().toISOString() });
-  saveHistory();
-}
-
-function updateTitle(id, title) {
-  const conv = conversations.find(c => c.id === id);
-  if (!conv) return;
-  conv.title = title || 'Untitled';
-  saveHistory();
-}
-
-function loadConv(id) {
-  const conv = conversations.find(c => c.id === id);
-  if (!conv) return;
-  currentConvId = id;
-  saveHistory();
+function renderSession() {
   messages.innerHTML = '';
-  for (const msg of conv.messages) {
-    addBubble(msg.text, msg.who, false);
-  }
-  renderHistory();
-  closeHistory();
-}
-
-function formatDate(iso) {
-  const d = new Date(iso);
-  const now = new Date();
-  const isToday = d.toDateString() === now.toDateString();
-  const yesterday = new Date(now);
-  yesterday.setDate(yesterday.getDate() - 1);
-  const isYesterday = d.toDateString() === yesterday.toDateString();
-  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  if (isToday) return `Today ${time}`;
-  if (isYesterday) return `Yesterday ${time}`;
-  return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + time;
-}
-
-function renderHistory() {
-  const list = $('#historyList');
-  if (!list) return;
-  list.innerHTML = '';
-  if (conversations.length === 0) {
-    list.innerHTML = '<div class="history-empty">No conversations yet</div>';
+  if (sessionMessages.length === 0) {
+    addBubble('...', 'ryo', false);
     return;
   }
-  for (const conv of conversations) {
-    const entry = document.createElement('div');
-    entry.className = 'history-entry' + (conv.id === currentConvId ? ' active' : '');
-
-    const titleInput = document.createElement('input');
-    titleInput.className = 'history-entry-title';
-    titleInput.value = conv.title;
-    titleInput.spellcheck = false;
-    titleInput.addEventListener('change', () => updateTitle(conv.id, titleInput.value));
-    titleInput.addEventListener('focus', (e) => e.stopPropagation());
-    // Prevent click on input from loading the conversation
-    titleInput.addEventListener('click', (e) => e.stopPropagation());
-
-    const meta = document.createElement('div');
-    meta.className = 'history-entry-meta';
-    meta.textContent = formatDate(conv.created) + ' · ' + conv.messages.length + ' messages';
-
-    entry.appendChild(titleInput);
-    entry.appendChild(meta);
-    entry.addEventListener('click', () => loadConv(conv.id));
-    list.appendChild(entry);
+  for (const m of sessionMessages) {
+    addBubble(m.text, m.who, false);
   }
-}
-
-function openHistory() {
-  renderHistory();
-  $('#historyPanel').classList.add('open');
-}
-
-function closeHistory() {
-  $('#historyPanel').classList.remove('open');
 }
 
 // ── Bubbles & Expressions ──
@@ -223,7 +152,11 @@ function addBubble(text, who, save = true) {
   el.textContent = text;
   messages.append(el);
   messages.scrollTop = messages.scrollHeight;
-  if (save && text) saveMsg(text, who);
+  if (save && text) {
+    sessionMessages.push({ text, who, time: new Date().toISOString() });
+    saveSession();
+    updateContextBar();
+  }
   return el;
 }
 
@@ -301,8 +234,14 @@ function connect() {
     if (msg.type === 'turnComplete') {
       if (ryoBubble) {
         const fullText = ryoBubble.textContent.trim();
-        if (fullText) saveRyoResponse(fullText);
-        else ryoBubble.remove();
+        if (fullText) {
+          // Save the complete response
+          sessionMessages.push({ text: fullText, who: 'ryo', time: new Date().toISOString() });
+          saveSession();
+          updateContextBar();
+        } else {
+          ryoBubble.remove();
+        }
         ryoBubble = null;
       }
       const wait = Math.max(0, (playhead - (audioContext?.currentTime || 0)) * 1000);
@@ -656,33 +595,44 @@ function setMode(mode) {
 liveModeBtn.addEventListener('click', () => setMode('live'));
 pushModeBtn.addEventListener('click', () => setMode('push'));
 
-// ── History Panel ──
-$('#historyBtn').addEventListener('click', () => {
-  const panel = $('#historyPanel');
-  panel.classList.contains('open') ? closeHistory() : openHistory();
-});
-
-$('#newChatBtn').addEventListener('click', () => {
-  createNewConv();
-  messages.innerHTML = '<article class="bubble ryo">...</article>';
-  closeHistory();
-});
-
-// Close history when clicking outside
-document.addEventListener('click', (e) => {
-  const panel = $('#historyPanel');
-  const btn = $('#historyBtn');
-  if (panel.classList.contains('open') && !panel.contains(e.target) && !btn.contains(e.target)) {
-    closeHistory();
-  }
-});
-
 // ── Settings ──
-$('#settingsBtn').onclick = () => $('#settings').showModal();
+$('#settingsBtn').onclick = () => {
+  updateContextBar();
+  $('#settings').showModal();
+};
 $('#background').onchange = (e) => document.body.dataset.background = e.target.value;
 $('#outfit').onchange = (e) => avatar.className = `avatar outfit-${e.target.value}`;
 
+// Trim button
+$('#trimBtn').onclick = () => {
+  const before = sessionMessages.length;
+  trimSession();
+  const after = sessionMessages.length;
+  const removed = before - after;
+  if (removed > 0) {
+    hintText.textContent = `Trimmed ${removed} messages.`;
+    setTimeout(() => { hintText.textContent = ''; }, 3000);
+  } else {
+    hintText.textContent = 'Nothing to trim.';
+    setTimeout(() => { hintText.textContent = ''; }, 3000);
+  }
+};
+
+// Clear everything button → opens confirm dialog
+$('#clearAllBtn').onclick = () => {
+  const dialog = $('#confirmDialog');
+  dialog.showModal();
+  dialog.addEventListener('close', () => {
+    if (dialog.returnValue === 'confirm') {
+      clearSession();
+      hintText.textContent = 'Session cleared.';
+      setTimeout(() => { hintText.textContent = ''; }, 3000);
+    }
+  }, { once: true });
+};
+
 // ── Init ──
-loadHistory();
-if (!currentConvId || !getCurrentConv()) createNewConv();
+loadSession();
+renderSession();
+updateContextBar();
 connect();
