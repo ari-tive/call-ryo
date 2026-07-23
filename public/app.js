@@ -49,10 +49,7 @@ const expressionMap = {
   'confidently': 'assets/neutral2.png',
   'shyly': 'assets/neutral3.png'
 };
-
-let frameTimer, audioContext, playhead = 0;
-let chatHistory = [];
-let isGenerating = false;
+let socket, frameTimer, audioContext, playhead = 0, transcript = '';
 
 function addBubble(text, who) {
   const el = document.createElement('article');
@@ -79,120 +76,61 @@ function animateMouth(active) {
   }
 }
 
-async function sendMessage(text) {
-  if (isGenerating || !text.trim()) return;
-
-  isGenerating = true;
-  status.textContent = 'Thinking...';
-  addBubble(text, 'user');
-
-  // Add to history
-  chatHistory.push({ role: 'user', text: text.trim() });
-
-  // Keep history manageable (last 20 messages)
-  if (chatHistory.length > 20) {
-    chatHistory = chatHistory.slice(-20);
-  }
-
-  const input = $('#messageInput');
-  input.value = '';
-
-  try {
-    const response = await fetch('/api/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        message: text.trim(),
-        history: chatHistory.slice(0, -1) // Don't include current message in history
-      })
-    });
-
-    if (!response.ok) {
-      throw new Error(`Server error: ${response.status}`);
+function connect() {
+  const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
+  socket = new WebSocket(`${protocol}://${location.host}/api/live`);
+  status.textContent = 'Connecting…';
+  socket.onmessage = async ({ data }) => {
+    const msg = JSON.parse(data);
+    if (msg.type === 'ready') status.textContent = 'Online';
+    if (msg.type === 'error') { status.textContent = 'Error'; addBubble(msg.message, 'ryo'); }
+    if (msg.type === 'expression') setExpression(msg.expression);
+    if (msg.type === 'audio' && voiceToggle.checked) await queuePcm(msg.data, 24000);
+    if (msg.type === 'transcript') transcript += msg.text;
+    if (msg.type === 'text') transcript += msg.text;
+    if (msg.type === 'turnComplete') {
+      if (transcript.trim()) addBubble(transcript.trim(), 'ryo');
+      transcript = '';
+      const wait = Math.max(0, (playhead - (audioContext?.currentTime || 0)) * 1000);
+      setTimeout(() => animateMouth(false), wait + 100);
     }
+  };
+  socket.onclose = () => { status.textContent = 'Offline'; setTimeout(connect, 2000); };
+}
 
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let fullText = '';
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          try {
-            const data = JSON.parse(line.slice(6));
-
-            if (data.type === 'ready') {
-              status.textContent = 'Online';
-            }
-
-            if (data.type === 'chunk') {
-              fullText += data.text;
-              animateMouth(true);
-            }
-
-            if (data.type === 'expression') {
-              setExpression(data.expression);
-            }
-
-            if (data.type === 'text') {
-              // Add the final clean text as a bubble
-              if (data.text && data.text.trim()) {
-                addBubble(data.text.trim(), 'ryo');
-                chatHistory.push({ role: 'model', text: data.text.trim() });
-              }
-            }
-
-            if (data.type === 'turnComplete') {
-              animateMouth(false);
-            }
-
-            if (data.type === 'error') {
-              status.textContent = 'Error';
-              addBubble(data.message, 'ryo');
-            }
-
-            if (data.type === 'done') {
-              status.textContent = 'Online';
-            }
-          } catch (e) {
-            console.error('Failed to parse SSE data:', e);
-          }
-        }
-      }
-    }
-  } catch (error) {
-    console.error('Send failed:', error);
-    status.textContent = 'Error';
-    addBubble('Oops! Something went wrong. Please try again.', 'ryo');
-  } finally {
-    isGenerating = false;
-    animateMouth(false);
-    status.textContent = 'Online';
-  }
+async function queuePcm(base64, rate) {
+  audioContext ||= new AudioContext({ sampleRate: rate });
+  if (audioContext.state === 'suspended') await audioContext.resume();
+  const raw = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+  const pcm = new Int16Array(raw.buffer);
+  const buffer = audioContext.createBuffer(1, pcm.length, rate);
+  const channel = buffer.getChannelData(0);
+  for (let i = 0; i < pcm.length; i++) channel[i] = pcm[i] / 32768;
+  const source = audioContext.createBufferSource();
+  source.buffer = buffer;
+  source.connect(audioContext.destination);
+  playhead = Math.max(playhead, audioContext.currentTime + .03);
+  source.start(playhead);
+  playhead += buffer.duration;
+  animateMouth(true);
 }
 
 $('#chatForm').addEventListener('submit', (e) => {
   e.preventDefault();
   const input = $('#messageInput');
   const text = input.value.trim();
-  if (text) sendMessage(text);
+  if (!text || socket?.readyState !== WebSocket.OPEN) return;
+  addBubble(text, 'user');
+  socket.send(JSON.stringify({ type: 'text', text }));
+  input.value = '';
 });
 
-// Speech Recognition
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 if (SpeechRecognition) {
   const recognition = new SpeechRecognition();
   recognition.interimResults = true;
   recognition.continuous = false;
-  recognition.onstart = () => { $('#micBtn').classList.add('listening'); status.textContent = 'Listening...'; };
+  recognition.onstart = () => { $('#micBtn').classList.add('listening'); status.textContent = 'Listening…'; };
   recognition.onresult = (e) => $('#messageInput').value = Array.from(e.results).map(r => r[0].transcript).join('');
   recognition.onend = () => { $('#micBtn').classList.remove('listening'); status.textContent = 'Online'; if ($('#messageInput').value.trim()) $('#chatForm').requestSubmit(); };
   $('#micBtn').onclick = () => recognition.start();
@@ -201,10 +139,7 @@ if (SpeechRecognition) {
   $('#micBtn').title = 'Speech recognition is not supported in this browser.';
 }
 
-// Settings
 $('#settingsBtn').onclick = () => $('#settings').showModal();
 $('#background').onchange = (e) => document.body.dataset.background = e.target.value;
 $('#outfit').onchange = (e) => avatar.className = `avatar outfit-${e.target.value}`;
-
-// Initial status
-status.textContent = 'Online';
+connect();
