@@ -39,6 +39,8 @@ const expressionMap = {
   'confidently': 'assets/neutral2.png', 'shyly': 'assets/neutral3.png'
 };
 
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+
 // ── State ──
 let socket, frameTimer, audioContext, playhead = 0;
 let isMuted = false;
@@ -65,8 +67,18 @@ let liveProcessor = null;
 let liveVadBuffer = [];
 let liveSilenceStart = 0;
 let liveSpeaking = false;
+let liveVoiceStart = 0;
+let liveVoiceConfirmed = false;
+let liveCooldown = 0;
 let liveRec = null;
 let liveRecText = '';
+
+// ── VAD Tuning ──
+const VAD_VOICE_THRESHOLD = 0.04;    // RMS to START detecting voice
+const VAD_CONTINUE_THRESHOLD = 0.025; // RMS to CONTINUE once started (hysteresis)
+const VAD_MIN_SPEECH_MS = 400;        // ms of voice before we confirm it's real speech
+const VAD_MIN_AUDIO_SAMPLES = 16000;  // 1 second minimum audio before sending
+const VAD_COOLDOWN_MS = 1500;         // cooldown between sends
 
 // ── Bubbles & Expressions ──
 function addBubble(text, who) {
@@ -197,6 +209,16 @@ function pcmToBase64(pcm) {
   return btoa(binary);
 }
 
+function showUserBubble(srText) {
+  const text = srText.trim();
+  if (text) {
+    addBubble(text, 'user');
+  } else {
+    addBubble('(voice message)', 'user');
+  }
+  messageInput.value = '';
+}
+
 function cleanupPush() {
   pushActive = false;
   talkBtn.classList.remove('recording');
@@ -211,6 +233,9 @@ function cleanupPush() {
 
 function cleanupLive() {
   liveActive = false;
+  liveSpeaking = false;
+  liveVoiceConfirmed = false;
+  liveVadBuffer = [];
   talkBtn.classList.remove('live-active', 'recording');
   if (liveProcessor) { try { liveProcessor.disconnect(); } catch {} liveProcessor = null; }
   if (liveAudioCtx) { try { liveAudioCtx.close(); } catch {} liveAudioCtx = null; }
@@ -269,7 +294,6 @@ async function startPush() {
   updateVisual();
 
   // SpeechRecognition for text display
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (SR) {
     pushRec = new SR();
     pushRec.continuous = true;
@@ -280,9 +304,9 @@ async function startPush() {
       pushRecText = text;
       messageInput.value = text;
     };
-    pushRec.onerror = () => {};
+    pushRec.onerror = (e) => console.warn('Push SR error:', e.error);
     pushRec.onend = () => { if (pushActive) try { pushRec.start(); } catch {} };
-    try { pushRec.start(); } catch {}
+    try { pushRec.start(); } catch (err) { console.warn('Push SR start failed:', err); }
   }
 }
 
@@ -297,17 +321,12 @@ function stopPush() {
     const base64 = pcmToBase64(merged);
     if (base64.length > 100) {
       sendAudio(base64);
+      showUserBubble(recText);
       hintText.textContent = 'Audio sent!';
     } else {
       hintText.textContent = 'Too short — hold longer.';
     }
     setTimeout(() => { hintText.textContent = 'Hold the mic to talk.'; }, 1500);
-  }
-
-  // Show text bubble
-  if (recText.trim()) {
-    addBubble(recText.trim(), 'user');
-    messageInput.value = '';
   }
 }
 
@@ -325,6 +344,9 @@ async function startLive() {
   liveVadBuffer = [];
   liveSilenceStart = 0;
   liveSpeaking = false;
+  liveVoiceStart = 0;
+  liveVoiceConfirmed = false;
+  liveCooldown = 0;
   liveRecText = '';
   talkBtn.classList.add('live-active');
   hintText.textContent = 'Live mode — speak naturally, auto-sends on silence.';
@@ -337,24 +359,31 @@ async function startLive() {
   liveProcessor.onaudioprocess = (e) => {
     if (!liveActive) return;
     const input = e.inputBuffer.getChannelData(0);
+    const now = Date.now();
+
+    // Cooldown — don't process audio right after sending
+    if (now < liveCooldown) return;
 
     // RMS for voice activity detection
     let sum = 0;
     for (let i = 0; i < input.length; i++) sum += input[i] * input[i];
     const rms = Math.sqrt(sum / input.length);
 
-    const now = Date.now();
     const silenceMs = parseInt(silenceTimeoutSelect.value) || 2000;
 
-    if (rms > 0.015) {
+    // Use hysteresis: higher threshold to start, lower to continue
+    const threshold = liveSpeaking ? VAD_CONTINUE_THRESHOLD : VAD_VOICE_THRESHOLD;
+
+    if (rms > threshold) {
       // Voice detected
       if (!liveSpeaking) {
         liveSpeaking = true;
         liveVadBuffer = [];
         liveSilenceStart = 0;
-        status.textContent = 'Listening…';
-        talkBtn.classList.add('recording');
+        liveVoiceStart = now;
+        liveVoiceConfirmed = false;
       }
+
       // Buffer audio
       const pcm = new Int16Array(input.length);
       for (let i = 0; i < input.length; i++) {
@@ -362,16 +391,43 @@ async function startLive() {
         pcm[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
       }
       liveVadBuffer.push(pcm);
+
+      // Confirm voice after minimum speech duration
+      if (!liveVoiceConfirmed && (now - liveVoiceStart) > VAD_MIN_SPEECH_MS) {
+        liveVoiceConfirmed = true;
+        status.textContent = 'Listening…';
+        talkBtn.classList.add('recording');
+      }
+
       liveSilenceStart = 0;
     } else if (liveSpeaking) {
       // Silence while speaking
       if (liveSilenceStart === 0) liveSilenceStart = now;
-      if (now - liveSilenceStart > silenceMs) {
-        // Silence timeout — send buffered audio
+      if ((now - liveSilenceStart) > silenceMs) {
+        // Silence timeout — send if we confirmed real voice and have enough audio
         liveSpeaking = false;
         talkBtn.classList.remove('recording');
         status.textContent = 'Online';
-        sendLiveBuffer();
+
+        if (liveVoiceConfirmed && liveVadBuffer.length > 0) {
+          const merged = mergePcmChunks(liveVadBuffer);
+          liveVadBuffer = [];
+
+          // Minimum audio length check
+          if (merged.length >= VAD_MIN_AUDIO_SAMPLES) {
+            const base64 = pcmToBase64(merged);
+            if (base64.length > 100) {
+              sendAudio(base64);
+              showUserBubble(liveRecText);
+              liveRecText = '';
+              liveCooldown = Date.now() + VAD_COOLDOWN_MS;
+            }
+          }
+        } else {
+          liveVadBuffer = [];
+        }
+
+        liveVoiceConfirmed = false;
       }
     }
   };
@@ -380,7 +436,6 @@ async function startLive() {
   liveProcessor.connect(liveAudioCtx.destination);
 
   // SpeechRecognition for text display
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (SR) {
     liveRec = new SR();
     liveRec.continuous = true;
@@ -391,37 +446,27 @@ async function startLive() {
       liveRecText = text;
       messageInput.value = text;
     };
-    liveRec.onerror = () => {};
+    liveRec.onerror = (e) => console.warn('Live SR error:', e.error);
     liveRec.onend = () => { if (liveActive) try { liveRec.start(); } catch {} };
-    try { liveRec.start(); } catch {}
-  }
-}
-
-function sendLiveBuffer() {
-  if (liveVadBuffer.length === 0) return;
-  const merged = mergePcmChunks(liveVadBuffer);
-  liveVadBuffer = [];
-
-  // Minimum 0.5s of audio
-  if (merged.length < 8000) return;
-
-  const base64 = pcmToBase64(merged);
-  if (base64.length > 100) {
-    sendAudio(base64);
-    // Show text bubble
-    if (liveRecText.trim()) {
-      addBubble(liveRecText.trim(), 'user');
-      liveRecText = '';
-      messageInput.value = '';
-    }
+    try { liveRec.start(); } catch (err) { console.warn('Live SR start failed:', err); }
   }
 }
 
 function stopLive() {
   if (!liveActive) return;
-  // Send any remaining buffer
-  if (liveSpeaking) sendLiveBuffer();
-  // Send any remaining text
+  // Send any remaining confirmed buffer
+  if (liveSpeaking && liveVoiceConfirmed && liveVadBuffer.length > 0) {
+    const merged = mergePcmChunks(liveVadBuffer);
+    if (merged.length >= VAD_MIN_AUDIO_SAMPLES) {
+      const base64 = pcmToBase64(merged);
+      if (base64.length > 100) {
+        sendAudio(base64);
+        showUserBubble(liveRecText);
+        liveRecText = '';
+      }
+    }
+  }
+  // Show any remaining text
   if (messageInput.value.trim()) {
     addBubble(messageInput.value.trim(), 'user');
     messageInput.value = '';
