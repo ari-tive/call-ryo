@@ -74,19 +74,156 @@ let liveRec = null;
 let liveRecText = '';
 
 // ── VAD Tuning ──
-const VAD_VOICE_THRESHOLD = 0.04;    // RMS to START detecting voice
-const VAD_CONTINUE_THRESHOLD = 0.025; // RMS to CONTINUE once started (hysteresis)
-const VAD_MIN_SPEECH_MS = 400;        // ms of voice before we confirm it's real speech
-const VAD_MIN_AUDIO_SAMPLES = 16000;  // 1 second minimum audio before sending
-const VAD_COOLDOWN_MS = 1500;         // cooldown between sends
+const VAD_VOICE_THRESHOLD = 0.04;
+const VAD_CONTINUE_THRESHOLD = 0.025;
+const VAD_MIN_SPEECH_MS = 400;
+const VAD_MIN_AUDIO_SAMPLES = 16000;
+const VAD_COOLDOWN_MS = 1500;
+
+// ── Conversation History ──
+const STORAGE_KEY = 'ryo_conversations';
+const CURRENT_KEY = 'ryo_current_id';
+let conversations = [];
+let currentConvId = null;
+
+function genId() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
+function loadHistory() {
+  try { conversations = JSON.parse(localStorage.getItem(STORAGE_KEY)) || []; }
+  catch { conversations = []; }
+  currentConvId = localStorage.getItem(CURRENT_KEY) || null;
+  // Validate current ID exists
+  if (currentConvId && !conversations.find(c => c.id === currentConvId)) {
+    currentConvId = null;
+  }
+}
+
+function saveHistory() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(conversations));
+  localStorage.setItem(CURRENT_KEY, currentConvId || '');
+}
+
+function getCurrentConv() {
+  return conversations.find(c => c.id === currentConvId);
+}
+
+function createNewConv() {
+  const conv = {
+    id: genId(),
+    title: 'New Chat',
+    created: new Date().toISOString(),
+    messages: []
+  };
+  conversations.unshift(conv);
+  currentConvId = conv.id;
+  saveHistory();
+  renderHistory();
+  return conv;
+}
+
+function saveMsg(text, who) {
+  const conv = getCurrentConv();
+  if (!conv) return;
+  conv.messages.push({ text, who, time: new Date().toISOString() });
+  // Auto-title from first user message
+  if (who === 'user' && conv.title === 'New Chat') {
+    conv.title = text.length > 40 ? text.slice(0, 40) + '…' : text;
+    renderHistory();
+  }
+  saveHistory();
+}
+
+function saveRyoResponse(text) {
+  const conv = getCurrentConv();
+  if (!conv || !text) return;
+  conv.messages.push({ text, who: 'ryo', time: new Date().toISOString() });
+  saveHistory();
+}
+
+function updateTitle(id, title) {
+  const conv = conversations.find(c => c.id === id);
+  if (!conv) return;
+  conv.title = title || 'Untitled';
+  saveHistory();
+}
+
+function loadConv(id) {
+  const conv = conversations.find(c => c.id === id);
+  if (!conv) return;
+  currentConvId = id;
+  saveHistory();
+  messages.innerHTML = '';
+  for (const msg of conv.messages) {
+    addBubble(msg.text, msg.who, false);
+  }
+  renderHistory();
+  closeHistory();
+}
+
+function formatDate(iso) {
+  const d = new Date(iso);
+  const now = new Date();
+  const isToday = d.toDateString() === now.toDateString();
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const isYesterday = d.toDateString() === yesterday.toDateString();
+  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  if (isToday) return `Today ${time}`;
+  if (isYesterday) return `Yesterday ${time}`;
+  return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + time;
+}
+
+function renderHistory() {
+  const list = $('#historyList');
+  if (!list) return;
+  list.innerHTML = '';
+  if (conversations.length === 0) {
+    list.innerHTML = '<div class="history-empty">No conversations yet</div>';
+    return;
+  }
+  for (const conv of conversations) {
+    const entry = document.createElement('div');
+    entry.className = 'history-entry' + (conv.id === currentConvId ? ' active' : '');
+
+    const titleInput = document.createElement('input');
+    titleInput.className = 'history-entry-title';
+    titleInput.value = conv.title;
+    titleInput.spellcheck = false;
+    titleInput.addEventListener('change', () => updateTitle(conv.id, titleInput.value));
+    titleInput.addEventListener('focus', (e) => e.stopPropagation());
+    // Prevent click on input from loading the conversation
+    titleInput.addEventListener('click', (e) => e.stopPropagation());
+
+    const meta = document.createElement('div');
+    meta.className = 'history-entry-meta';
+    meta.textContent = formatDate(conv.created) + ' · ' + conv.messages.length + ' messages';
+
+    entry.appendChild(titleInput);
+    entry.appendChild(meta);
+    entry.addEventListener('click', () => loadConv(conv.id));
+    list.appendChild(entry);
+  }
+}
+
+function openHistory() {
+  renderHistory();
+  $('#historyPanel').classList.add('open');
+}
+
+function closeHistory() {
+  $('#historyPanel').classList.remove('open');
+}
 
 // ── Bubbles & Expressions ──
-function addBubble(text, who) {
+function addBubble(text, who, save = true) {
   const el = document.createElement('article');
   el.className = `bubble ${who}`;
   el.textContent = text;
   messages.append(el);
   messages.scrollTop = messages.scrollHeight;
+  if (save && text) saveMsg(text, who);
   return el;
 }
 
@@ -152,18 +289,20 @@ function connect() {
     if (msg.type === 'audio' && voiceToggle.checked) await queuePcm(msg.data, 24000);
 
     if (msg.type === 'text' && msg.text) {
-      if (!ryoBubble) ryoBubble = addBubble('', 'ryo');
+      if (!ryoBubble) ryoBubble = addBubble('', 'ryo', false);
       ryoBubble.textContent += msg.text;
       messages.scrollTop = messages.scrollHeight;
     }
     if (msg.type === 'transcript' && msg.text) {
-      if (!ryoBubble) ryoBubble = addBubble('', 'ryo');
+      if (!ryoBubble) ryoBubble = addBubble('', 'ryo', false);
       ryoBubble.textContent += msg.text;
       messages.scrollTop = messages.scrollHeight;
     }
     if (msg.type === 'turnComplete') {
       if (ryoBubble) {
-        if (!ryoBubble.textContent.trim()) ryoBubble.remove();
+        const fullText = ryoBubble.textContent.trim();
+        if (fullText) saveRyoResponse(fullText);
+        else ryoBubble.remove();
         ryoBubble = null;
       }
       const wait = Math.max(0, (playhead - (audioContext?.currentTime || 0)) * 1000);
@@ -259,7 +398,6 @@ async function startPush() {
   talkBtn.classList.add('recording');
   hintText.textContent = 'Recording… release to send.';
 
-  // Audio recording
   pushAudioCtx = new AudioContext({ sampleRate: 16000 });
   const source = pushAudioCtx.createMediaStreamSource(pushMediaStream);
   pushAnalyser = pushAudioCtx.createAnalyser();
@@ -281,7 +419,6 @@ async function startPush() {
   processor.connect(pushAudioCtx.destination);
   pushProcessor = processor;
 
-  // Volume visual
   function updateVisual() {
     if (!pushActive || !pushAnalyser) return;
     const data = new Uint8Array(pushAnalyser.frequencyBinCount);
@@ -293,7 +430,6 @@ async function startPush() {
   }
   updateVisual();
 
-  // SpeechRecognition for text display
   if (SR) {
     pushRec = new SR();
     pushRec.continuous = true;
@@ -351,7 +487,6 @@ async function startLive() {
   talkBtn.classList.add('live-active');
   hintText.textContent = 'Live mode — speak naturally, auto-sends on silence.';
 
-  // Audio + VAD
   liveAudioCtx = new AudioContext({ sampleRate: 16000 });
   const source = liveAudioCtx.createMediaStreamSource(liveMediaStream);
   liveProcessor = liveAudioCtx.createScriptProcessor(4096, 1, 1);
@@ -361,21 +496,16 @@ async function startLive() {
     const input = e.inputBuffer.getChannelData(0);
     const now = Date.now();
 
-    // Cooldown — don't process audio right after sending
     if (now < liveCooldown) return;
 
-    // RMS for voice activity detection
     let sum = 0;
     for (let i = 0; i < input.length; i++) sum += input[i] * input[i];
     const rms = Math.sqrt(sum / input.length);
 
     const silenceMs = parseInt(silenceTimeoutSelect.value) || 2000;
-
-    // Use hysteresis: higher threshold to start, lower to continue
     const threshold = liveSpeaking ? VAD_CONTINUE_THRESHOLD : VAD_VOICE_THRESHOLD;
 
     if (rms > threshold) {
-      // Voice detected
       if (!liveSpeaking) {
         liveSpeaking = true;
         liveVadBuffer = [];
@@ -384,7 +514,6 @@ async function startLive() {
         liveVoiceConfirmed = false;
       }
 
-      // Buffer audio
       const pcm = new Int16Array(input.length);
       for (let i = 0; i < input.length; i++) {
         const s = Math.max(-1, Math.min(1, input[i]));
@@ -392,7 +521,6 @@ async function startLive() {
       }
       liveVadBuffer.push(pcm);
 
-      // Confirm voice after minimum speech duration
       if (!liveVoiceConfirmed && (now - liveVoiceStart) > VAD_MIN_SPEECH_MS) {
         liveVoiceConfirmed = true;
         status.textContent = 'Listening…';
@@ -401,10 +529,8 @@ async function startLive() {
 
       liveSilenceStart = 0;
     } else if (liveSpeaking) {
-      // Silence while speaking
       if (liveSilenceStart === 0) liveSilenceStart = now;
       if ((now - liveSilenceStart) > silenceMs) {
-        // Silence timeout — send if we confirmed real voice and have enough audio
         liveSpeaking = false;
         talkBtn.classList.remove('recording');
         status.textContent = 'Online';
@@ -413,7 +539,6 @@ async function startLive() {
           const merged = mergePcmChunks(liveVadBuffer);
           liveVadBuffer = [];
 
-          // Minimum audio length check
           if (merged.length >= VAD_MIN_AUDIO_SAMPLES) {
             const base64 = pcmToBase64(merged);
             if (base64.length > 100) {
@@ -435,7 +560,6 @@ async function startLive() {
   source.connect(liveProcessor);
   liveProcessor.connect(liveAudioCtx.destination);
 
-  // SpeechRecognition for text display
   if (SR) {
     liveRec = new SR();
     liveRec.continuous = true;
@@ -454,7 +578,6 @@ async function startLive() {
 
 function stopLive() {
   if (!liveActive) return;
-  // Send any remaining confirmed buffer
   if (liveSpeaking && liveVoiceConfirmed && liveVadBuffer.length > 0) {
     const merged = mergePcmChunks(liveVadBuffer);
     if (merged.length >= VAD_MIN_AUDIO_SAMPLES) {
@@ -466,7 +589,6 @@ function stopLive() {
       }
     }
   }
-  // Show any remaining text
   if (messageInput.value.trim()) {
     addBubble(messageInput.value.trim(), 'user');
     messageInput.value = '';
@@ -479,11 +601,8 @@ function stopLive() {
 // ── Talk Button Logic ──
 talkBtn.addEventListener('mousedown', (e) => {
   e.preventDefault();
-  if (voiceMode === 'push') {
-    startPush();
-  } else {
-    liveActive ? stopLive() : startLive();
-  }
+  if (voiceMode === 'push') { startPush(); }
+  else { liveActive ? stopLive() : startLive(); }
 });
 
 talkBtn.addEventListener('mouseup', (e) => {
@@ -497,11 +616,8 @@ talkBtn.addEventListener('mouseleave', () => {
 
 talkBtn.addEventListener('touchstart', (e) => {
   e.preventDefault();
-  if (voiceMode === 'push') {
-    startPush();
-  } else {
-    liveActive ? stopLive() : startLive();
-  }
+  if (voiceMode === 'push') { startPush(); }
+  else { liveActive ? stopLive() : startLive(); }
 });
 
 talkBtn.addEventListener('touchend', (e) => {
@@ -509,7 +625,6 @@ talkBtn.addEventListener('touchend', (e) => {
   if (voiceMode === 'push') stopPush();
 });
 
-// Keyboard: spacebar for push-to-talk
 document.addEventListener('keydown', (e) => {
   if (e.code === 'Space' && e.target.tagName !== 'INPUT' && voiceMode === 'push' && !pushActive) {
     e.preventDefault();
@@ -530,11 +645,9 @@ muteBtn.addEventListener('click', () => setMuted(!isMuted));
 function setMode(mode) {
   if (liveActive) stopLive();
   if (pushActive) stopPush();
-
   voiceMode = mode;
   liveModeBtn.classList.toggle('active', mode === 'live');
   pushModeBtn.classList.toggle('active', mode === 'push');
-
   hintText.textContent = mode === 'live'
     ? 'Click the mic to start talking, or type below.'
     : 'Hold the mic to talk, or type below.';
@@ -543,10 +656,33 @@ function setMode(mode) {
 liveModeBtn.addEventListener('click', () => setMode('live'));
 pushModeBtn.addEventListener('click', () => setMode('push'));
 
+// ── History Panel ──
+$('#historyBtn').addEventListener('click', () => {
+  const panel = $('#historyPanel');
+  panel.classList.contains('open') ? closeHistory() : openHistory();
+});
+
+$('#newChatBtn').addEventListener('click', () => {
+  createNewConv();
+  messages.innerHTML = '<article class="bubble ryo">...</article>';
+  closeHistory();
+});
+
+// Close history when clicking outside
+document.addEventListener('click', (e) => {
+  const panel = $('#historyPanel');
+  const btn = $('#historyBtn');
+  if (panel.classList.contains('open') && !panel.contains(e.target) && !btn.contains(e.target)) {
+    closeHistory();
+  }
+});
+
 // ── Settings ──
 $('#settingsBtn').onclick = () => $('#settings').showModal();
 $('#background').onchange = (e) => document.body.dataset.background = e.target.value;
 $('#outfit').onchange = (e) => avatar.className = `avatar outfit-${e.target.value}`;
 
 // ── Init ──
+loadHistory();
+if (!currentConvId || !getCurrentConv()) createNewConv();
 connect();

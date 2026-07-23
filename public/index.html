@@ -12,7 +12,10 @@
     <section class="stage" aria-label="Avatar stage">
       <header class="topbar">
         <div><strong>Ryo</strong><span id="status">Connecting…</span></div>
-        <button id="settingsBtn" class="icon" aria-label="Open settings">⚙</button>
+        <div class="topbar-actions">
+          <button id="historyBtn" class="icon" aria-label="Chat history" title="Chat history">☰</button>
+          <button id="settingsBtn" class="icon" aria-label="Open settings" title="Settings">⚙</button>
+        </div>
       </header>
       <div class="glow"></div>
       <div id="avatar" class="avatar outfit-default" aria-label="Ryo avatar">
@@ -22,6 +25,15 @@
     </section>
 
     <section class="chat">
+      <!-- History Panel -->
+      <div class="history-panel" id="historyPanel">
+        <div class="history-header">
+          <span class="history-title-label">Chats</span>
+          <button id="newChatBtn" class="new-chat-btn">+ New</button>
+        </div>
+        <div class="history-list" id="historyList"></div>
+      </div>
+
       <div id="messages" class="messages" aria-live="polite">
         <article class="bubble ryo">...</article>
       </div>
