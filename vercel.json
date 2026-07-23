@@ -1,9 +1,13 @@
 {
-  "functions": {
-    "server.js": {
-      "includeFiles": ["public/**"]
+  "builds": [
+    {
+      "src": "server.js",
+      "use": "@vercel/node",
+      "config": {
+        "includeFiles": ["public/**"]
+      }
     }
-  },
+  ],
   "routes": [
     {
       "src": "/live",
@@ -11,7 +15,7 @@
     },
     {
       "src": "/(.*)",
-      "dest": "/public/$1"
+      "dest": "server.js"
     }
   ]
 }
