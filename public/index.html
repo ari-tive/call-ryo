@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#101329" />
-  <title>Ryo — Lightweight Roleplay</title>
+  <title>Ryo — Voice Chat</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body data-background="moonlit">
@@ -25,21 +25,47 @@
       <div id="messages" class="messages" aria-live="polite">
         <article class="bubble ryo">...</article>
       </div>
+
+      <!-- Voice Mode Bar -->
+      <div class="voice-bar">
+        <button type="button" id="muteBtn" class="voice-btn mute-btn" aria-label="Mute/Unmute Ryo" title="Mute/Unmute Ryo's voice">
+          <svg id="soundOnIcon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
+          <svg id="soundOffIcon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none"><path d="M11 5L6 9H2v6h4l5 4V5z"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>
+        </button>
+
+        <div class="mode-switch">
+          <button type="button" id="liveModeBtn" class="mode-btn active" data-mode="live" title="Live Talk — auto-sends on silence">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+            <span>Live</span>
+          </button>
+          <button type="button" id="pushModeBtn" class="mode-btn" data-mode="push" title="Push to Talk — hold to speak">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg>
+            <span>Push</span>
+          </button>
+        </div>
+
+        <button type="button" id="talkBtn" class="voice-btn talk-btn" aria-label="Talk" title="Hold to talk (Push mode) or click to start/stop (Live mode)">
+          <div class="talk-ring"></div>
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg>
+        </button>
+      </div>
+
+      <!-- Text Input Fallback -->
       <form id="chatForm" class="composer">
-        <button type="button" id="micBtn" class="mic" aria-label="Speak">●</button>
-        <input id="messageInput" autocomplete="off" placeholder="Speak or type…" maxlength="600" />
+        <input id="messageInput" autocomplete="off" placeholder="Type a message…" maxlength="600" />
         <button type="submit" class="send">Send</button>
       </form>
-      <p class="hint">Voice input uses your browser's speech recognition. Audio replies come from Gemini Live.</p>
+      <p class="hint" id="hintText">Click the mic to start talking, or type below.</p>
     </section>
   </main>
 
   <dialog id="settings">
     <form method="dialog">
-      <header><h2>Scene settings</h2><button class="icon" aria-label="Close">×</button></header>
+      <header><h2>Settings</h2><button class="icon" aria-label="Close">×</button></header>
       <label>Background<select id="background"><option value="moonlit">Moonlit library</option><option value="forest">Enchanted forest</option><option value="cafe">Rainy café</option></select></label>
       <label>Outfit tint<select id="outfit"><option value="default">Royal violet</option><option value="winter">Winter blue</option><option value="rose">Rose cloak</option></select></label>
       <label class="toggle"><input id="voiceToggle" type="checkbox" checked /> Play voice responses</label>
+      <label>Silence timeout (Live mode)<select id="silenceTimeout"><option value="1500">1.5s</option><option value="2000" selected>2s</option><option value="3000">3s</option><option value="5000">5s</option></select></label>
       <p>Replace the three PNG files in <code>public/assets</code> with your own perfectly aligned expressions at any time.</p>
     </form>
   </dialog>

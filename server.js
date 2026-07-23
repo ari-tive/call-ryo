@@ -62,6 +62,7 @@ wss.on('connection', async (socket) => {
       },
       config: {
         responseModalities: [Modality.AUDIO],
+        inputAudioTranscription: {},
         outputAudioTranscription: {},
         speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Achernar' } } },
         systemInstruction: {
@@ -98,6 +99,8 @@ Your spoken words should feel alive and emotional through these tags.` }]
       const msg = JSON.parse(raw.toString());
       if (msg.type === 'text' && typeof msg.text === 'string' && msg.text.trim()) {
         live.sendClientContent({ turns: [{ role: 'user', parts: [{ text: msg.text.trim() }] }], turnComplete: true });
+      } else if (msg.type === 'audio' && msg.data) {
+        live.sendClientContent({ turns: [{ role: 'user', parts: [{ inlineData: { mimeType: msg.mimeType || 'audio/pcm;rate=16000', data: msg.data } }] }], turnComplete: true });
       }
     } catch {
       socket.send(JSON.stringify({ type: 'error', message: 'Invalid client message.' }));
