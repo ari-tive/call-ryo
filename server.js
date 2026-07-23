@@ -101,6 +101,15 @@ Your spoken words should feel alive and emotional through these tags.` }]
         live.sendClientContent({ turns: [{ role: 'user', parts: [{ text: msg.text.trim() }] }], turnComplete: true });
       } else if (msg.type === 'audio' && msg.data) {
         live.sendClientContent({ turns: [{ role: 'user', parts: [{ inlineData: { mimeType: msg.mimeType || 'audio/pcm;rate=16000', data: msg.data } }] }], turnComplete: true });
+      } else if (msg.type === 'history' && Array.isArray(msg.messages)) {
+        // Replay conversation history so Gemini remembers context
+        const turns = msg.messages.map(m => ({
+          role: m.who === 'user' ? 'user' : 'model',
+          parts: [{ text: m.text }]
+        }));
+        if (turns.length > 0) {
+          live.sendClientContent({ turns, turnComplete: true });
+        }
       }
     } catch {
       socket.send(JSON.stringify({ type: 'error', message: 'Invalid client message.' }));

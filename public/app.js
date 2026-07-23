@@ -81,8 +81,9 @@ const VAD_MIN_AUDIO_SAMPLES = 16000;
 const VAD_COOLDOWN_MS = 1500;
 
 // ── Session (single infinite conversation) ──
+// gemini-3.1-flash-live-preview has a 1M token context window (~4M chars)
 const STORAGE_KEY = 'ryo_session';
-const MAX_CHARS = 500000;
+const MAX_CHARS = 4000000;
 let sessionMessages = [];
 
 function loadSession() {
@@ -109,7 +110,8 @@ function updateContextBar() {
   bar.style.width = pct + '%';
   bar.className = 'context-bar-fill' + (pct > 80 ? ' full' : pct > 60 ? ' high' : pct > 40 ? ' mid' : '');
   const usedK = (used / 1000).toFixed(1);
-  label.textContent = `${usedK}k / 500k chars`;
+  const maxK = (MAX_CHARS / 1000).toFixed(0);
+  label.textContent = `${usedK}k / ${maxK}k chars`;
 }
 
 function trimSession() {
@@ -216,7 +218,13 @@ function connect() {
   status.textContent = 'Connecting…';
   socket.onmessage = async ({ data }) => {
     const msg = JSON.parse(data);
-    if (msg.type === 'ready') status.textContent = 'Online';
+    if (msg.type === 'ready') {
+      status.textContent = 'Online';
+      // Replay conversation history so Gemini remembers context
+      if (sessionMessages.length > 0) {
+        socket.send(JSON.stringify({ type: 'history', messages: sessionMessages }));
+      }
+    }
     if (msg.type === 'error') { status.textContent = 'Error'; addBubble(msg.message, 'ryo'); }
     if (msg.type === 'expression') setExpression(msg.expression);
     if (msg.type === 'audio' && voiceToggle.checked) await queuePcm(msg.data, 24000);
