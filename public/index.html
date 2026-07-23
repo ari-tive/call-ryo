@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#101329" />
+  <title>Ryo — Lightweight Roleplay</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body data-background="moonlit">
+  <main class="app">
+    <section class="stage" aria-label="Avatar stage">
+      <header class="topbar">
+        <div><strong>Ryo</strong><span id="status">Connecting…</span></div>
+        <button id="settingsBtn" class="icon" aria-label="Open settings">⚙</button>
+      </header>
+      <div class="glow"></div>
+      <div id="avatar" class="avatar outfit-default" aria-label="Ryo avatar">
+        <img id="avatarImage" src="assets/neutral.png" alt="Ryo, a teenage anime girl" />
+      </div>
+      <div class="nameplate"><b>Ryo</b><small>Your Caring Friend</small></div>
+    </section>
+
+    <section class="chat">
+      <div id="messages" class="messages" aria-live="polite">
+        <article class="bubble ryo">...</article>
+      </div>
+      <form id="chatForm" class="composer">
+        <button type="button" id="micBtn" class="mic" aria-label="Speak">●</button>
+        <input id="messageInput" autocomplete="off" placeholder="Speak or type…" maxlength="600" />
+        <button type="submit" class="send">Send</button>
+      </form>
+      <p class="hint">Voice input uses your browser's speech recognition. Audio replies come from Gemini Live.</p>
+    </section>
+  </main>
+
+  <dialog id="settings">
+    <form method="dialog">
+      <header><h2>Scene settings</h2><button class="icon" aria-label="Close">×</button></header>
+      <label>Background<select id="background"><option value="moonlit">Moonlit library</option><option value="forest">Enchanted forest</option><option value="cafe">Rainy café</option></select></label>
+      <label>Outfit tint<select id="outfit"><option value="default">Royal violet</option><option value="winter">Winter blue</option><option value="rose">Rose cloak</option></select></label>
+      <label class="toggle"><input id="voiceToggle" type="checkbox" checked /> Play voice responses</label>
+      <p>Replace the three PNG files in <code>public/assets</code> with your own perfectly aligned expressions at any time.</p>
+    </form>
+  </dialog>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
