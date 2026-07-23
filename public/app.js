@@ -78,7 +78,7 @@ function animateMouth(active) {
 
 function connect() {
   const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
-  socket = new WebSocket(`${protocol}://${location.host}/api/live`);
+  socket = new WebSocket(`${protocol}://${location.host}/live`);
   status.textContent = 'Connecting…';
   socket.onmessage = async ({ data }) => {
     const msg = JSON.parse(data);
